@@ -31,14 +31,17 @@
 
 ### 快速开始
 1. 将本项目放到任意目录。
-2. 在 `download-list.txt` 中，每行写入一个视频页面的 URL。
+2. 在 `download-list.txt` 中，每行写入一个视频页面的 URL（空行会被忽略）。
 3. 如需登录态下载或更高质量：
-   - 获取`cookies.sqlite`或`cookies.txt`放在程序同级目录。
-   - 程序会优先使用`cookies.sqlite`，否则使用 `cookies.txt`，若均不存在则匿名下载。
-4. 运行程序：
-   - Windows：直接运行已编译的 `youget_windows_x64.exe`
-   - Linux：直接运行已编译的 `youget_linux_amd64`
-5. 程序会依次下载所有 URL 对应的视频，并在同目录生成对应的 `.mp3` 音频文件。
+   - 获取 `cookies.sqlite` 或 `cookies.txt` 放在程序同级目录。
+   - 程序会优先使用 `cookies.sqlite`，否则使用 `cookies.txt`，若均不存在则匿名下载。
+4. 运行程序（会先检查依赖是否可用，缺少 you-get/ffmpeg 会直接退出提示）：
+   - Windows：运行 `youget_windows_x64.exe` 或在源代码目录执行 `go run main.go`
+   - Linux：运行 `youget_linux_amd64` 或在源代码目录执行 `go run main.go`
+5. 对每个 URL，程序会：
+   - 调用 `you-get` 下载视频；若失败会打印错误并继续下一条。
+   - 自动解析下载结果：先从输出中提取 `.mp4` 名称，若找不到则取下载开始时间之后最新生成的 `.mp4`，再退化为使用 `title` 生成的文件名。
+   - 调用 `ffmpeg` 提取音频，使用 `-q:a 0 -map a` 生成与视频同名的 `.mp3` 文件（视频文件会保留）。
 
 ---
 

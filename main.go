@@ -2,16 +2,27 @@ package main
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 )
 
-func download(url string) {
+// sanitizeFileName removes invalid characters for Windows file names
+func sanitizeFileName(name string) string {
+	// Windows doesn't allow: < > : " / \ | ? *
+	invalidChars := regexp.MustCompile(`[<>:"/\\|?*]`)
+	name = invalidChars.ReplaceAllString(name, "-")
+	// Remove leading/trailing spaces and dots
+	name = strings.Trim(name, " .")
+	return name
+}
+
+func download(url string) (string, error) {
     var cmd *exec.Cmd
     if _, err := os.Stat("./cookies.sqlite"); err == nil {
         cmd = exec.Command("you-get", "-c", "cookies.sqlite", url)
@@ -20,77 +31,92 @@ func download(url string) {
     } else {
         cmd = exec.Command("you-get", url)
     }
+    
+    // Record time before download to find the newest file
+    beforeTime := time.Now()
+    
     output, err := cmd.CombinedOutput()
-    fmt.Println(string(output))
+    outputStr := string(output)
+    fmt.Println(outputStr)
     if err != nil {
         fmt.Printf("Error: %s\n", err)
+        return "", err
     }
-}
-
-type youGetJSON struct {
-	Title string `json:"title"`
-}
-
-func getTitle(url string) (string, error) {
-    var cmd *exec.Cmd
-    if _, err := os.Stat("./cookies.sqlite"); err == nil {
-        cmd = exec.Command("you-get", "-c", "cookies.sqlite", "--json", url)
-    } else if _, err := os.Stat("./cookies.txt"); err == nil {
-        cmd = exec.Command("you-get", "-c", "cookies.txt", "--json", url)
-    } else {
-        cmd = exec.Command("you-get", "--json", url)
+    
+    // Try to extract filename from you-get output (e.g., "Skipping .\filename.mp4" or "Downloading filename.mp4")
+    lines := strings.Split(outputStr, "\n")
+    for _, line := range lines {
+        trimmed := strings.TrimSpace(line)
+        // Look for "Skipping" or "Downloading" lines that contain .mp4
+        if (strings.Contains(trimmed, "Skipping") || strings.Contains(trimmed, "Downloading")) && strings.Contains(trimmed, ".mp4") {
+            // Extract filename - look for .mp4 and extract the filename
+            re := regexp.MustCompile(`[^\s]+\.mp4`)
+            matches := re.FindString(trimmed)
+            if matches != "" {
+                // Remove leading .\ or ./
+                matches = strings.TrimPrefix(matches, ".\\")
+                matches = strings.TrimPrefix(matches, "./")
+                // Check if file exists
+                if _, err := os.Stat(matches); err == nil {
+                    return matches, nil
+                }
+            }
+        }
     }
-    output, err := cmd.CombinedOutput()
+    
+    // Try to find the actual downloaded file by looking for the newest .mp4 file
+    entries, err := os.ReadDir(".")
     if err != nil {
-        return "", fmt.Errorf("you-get --json failed: %v, output: %s", err, string(output))
+        return "", fmt.Errorf("failed to read directory: %v", err)
     }
-    // Extract JSON object in case there are leading logs/noise
-    raw := string(output)
-    start := strings.Index(raw, "{")
-    end := strings.LastIndex(raw, "}")
-    var data []byte
-    if start != -1 && end != -1 && end >= start {
-        data = []byte(raw[start : end+1])
-    } else {
-        data = output
+    
+    var newestFile string
+    var newestTime time.Time
+    for _, e := range entries {
+        if e.IsDir() {
+            continue
+        }
+        name := e.Name()
+        if strings.HasSuffix(strings.ToLower(name), ".mp4") {
+            info, err := e.Info()
+            if err != nil {
+                continue
+            }
+            modTime := info.ModTime()
+            // Only consider files modified after download started (or check all if file was skipped)
+            if modTime.After(beforeTime) || modTime.Equal(beforeTime) {
+                if newestFile == "" || modTime.After(newestTime) {
+                    newestFile = name
+                    newestTime = modTime
+                }
+            }
+        }
     }
-    var meta youGetJSON
-    if err := json.Unmarshal(data, &meta); err != nil {
-        return "", fmt.Errorf("parse json failed: %v", err)
+    
+    if newestFile != "" {
+        return newestFile, nil
     }
-    return meta.Title, nil
+    
+    // Fallback: parse title from output and sanitize it
+    for _, line := range lines {
+        if strings.HasPrefix(strings.TrimSpace(line), "title:") {
+            parts := strings.SplitN(line, ":", 2)
+            if len(parts) == 2 {
+                title := strings.TrimSpace(parts[1])
+                sanitized := sanitizeFileName(title)
+                filename := sanitized + ".mp4"
+                // Check if file exists with sanitized name
+                if _, err := os.Stat(filename); err == nil {
+                    return filename, nil
+                }
+                return filename, nil
+            }
+        }
+    }
+    
+    return "", fmt.Errorf("title not found in you-get output and no .mp4 file detected")
 }
 
-func findDownloadedVideoPath(title string) (string, error) {
-	// Try common video extensions using the title as basename
-	exts := []string{".mp4", ".mkv", ".flv", ".webm", ".avi", ".mov", ".ts", ".m4v"}
-	for _, ext := range exts {
-		candidate := title + ext
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate, nil
-		}
-	}
-	// Fallback: scan current directory for files starting with title and ending with a known ext
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		return "", err
-	}
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if strings.HasPrefix(name, title) {
-			lower := strings.ToLower(name)
-			for _, ext := range exts {
-				if strings.HasSuffix(lower, ext) {
-					return name, nil
-				}
-			}
-		}
-	}
-	return "", fmt.Errorf("downloaded video not found for title: %s", title)
-}
 
 func convertToMP3(inputPath string) error {
 	outputPath := strings.TrimSuffix(inputPath, filepath.Ext(inputPath)) + ".mp3"
@@ -135,15 +161,9 @@ func main() {
 			break
 		}
 		fmt.Println("Downloading " + string(a))
-		download(string(a))
-		title, err := getTitle(string(a))
+		videoPath, err := download(string(a))
 		if err != nil {
-			fmt.Printf("Get title failed: %v\n", err)
-			continue
-		}
-		videoPath, err := findDownloadedVideoPath(title)
-		if err != nil {
-			fmt.Printf("Find video failed: %v\n", err)
+			fmt.Printf("Download failed: %v\n", err)
 			continue
 		}
 		if err := convertToMP3(videoPath); err != nil {
