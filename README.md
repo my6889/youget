@@ -40,8 +40,8 @@
    - Linux：运行 `youget_linux_amd64` 或在源代码目录执行 `go run main.go`
 5. 对每个 URL，程序会：
    - 调用 `you-get` 下载视频；若失败会打印错误并继续下一条。
-   - 自动解析下载结果：先从输出中提取 `.mp4` 名称，若找不到则取下载开始时间之后最新生成的 `.mp4`，再退化为使用 `title` 生成的文件名。
-   - 调用 `ffmpeg` 提取音频，使用 `-q:a 0 -map a` 生成与视频同名的 `.mp3` 文件（视频文件会保留）。
+   - 自动解析下载结果：先尝试解析 `.mp4` 名称；解析到的文件名会去除路径前缀并优先尝试其 `sanitize` 版本（处理非法文件名字符）是否存在，若存在则使用该文件；否则回退到原始解析文件名并检查其存在；如果仍未找到，则退化为使用 `title` 生成的 `*.mp4` 文件名。
+   - 调用 `ffmpeg` 提取音频，使用 `-q:a 0 -map a` 生成与视频同名的 `.mp3` 文件（视频文件保留）。如果目标 `.mp3` 已存在，程序将跳过转换以避免覆盖。
 
 ---
 
@@ -87,8 +87,7 @@
   - 某些站点的 `you-get --json` 输出会混杂日志，程序会尝试自动提取 JSON；若仍失败，请手动执行 `you-get --json <url>` 查看输出并反馈。
 - 已下载视频但未生成MP3？
   - 确认 `ffmpeg` 可用；或检查下载的视频扩展名是否非常规，必要时在源码中补充扩展名列表。
-- 多个文件名含相同 `title`？
-  - 程序会优先匹配与 `title` 完全同名的常见扩展；若同名文件较多，请清理目录中不相关文件后再运行。
+  - 如果目标 `.mp3` 已存在，程序会跳过转换并打印提示信息。
 
 ---
 
@@ -103,6 +102,19 @@ go build -o youget.exe
 ```
 ./youget.exe
 ```
+
+#### 交叉编译示例（生成指定二进制名）
+- 在 Bash (Linux/macOS)：
+```
+GOOS=linux GOARCH=amd64 go build -o youget_linux_amd64 .
+GOOS=windows GOARCH=amd64 go build -o youget_windows_x64.exe .
+```
+- 在 PowerShell：
+```
+$env:GOOS = 'linux'; $env:GOARCH = 'amd64'; go build -o youget_linux_amd64 .
+$env:GOOS = 'windows'; $env:GOARCH = 'amd64'; go build -o youget_windows_x64.exe .
+```
+生成的二进制示例：`youget_linux_amd64`, `youget_windows_x64.exe`。
 
 ---
 
